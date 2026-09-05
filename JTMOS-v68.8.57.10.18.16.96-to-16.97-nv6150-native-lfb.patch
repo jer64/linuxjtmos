@@ -1,0 +1,934 @@
+diff --git a/Makefile b/Makefile
+index 3d8d572..9943782 100644
+--- a/Makefile
++++ b/Makefile
+@@ -1,4 +1,4 @@
+-# JTMOS V68.8.57.10.18.16.96 df + CP cwd inheritance fix
++# JTMOS V68.8.57.10.18.16.97 GeForce 6150SE/MCP61 native LFB modeset
+ # A plain `make` builds kernel + userspace + compressed install payload,
+ # creates boot-only jtm32.img, root1440.img and the ATAPI root/demo image.
+ 
+@@ -37,7 +37,7 @@ default: image rootimage utilscdrom
+ all: default
+ 
+ help:
+-	@echo "JTMOS V68.8.57.10.18.16.96 df + CP cwd inheritance fix"
++	@echo "JTMOS V68.8.57.10.18.16.97 GeForce 6150SE/MCP61 native LFB modeset"
+ 	@echo "  make            build jtm32.img + root1440.img + utilities.iso"
+ 	@echo "  make image      build A: image using config/boot.mk (BOOT_DISPLAY=$(BOOT_DISPLAY))"
+ 	@echo "  make image-headless force VGA text/curses image + serial console defaults 0/0"
+@@ -216,6 +216,7 @@ check: libc
+ 	./tools/check_boot32pm_floppy_irq.sh
+ 	./tools/check_bootdrive_self_overwrite.sh
+ 	sh ./tools/check_headless_telnetd.sh
++	./tools/check_nv6150_lfb.sh
+ 	sh ./tools/check_boot_display_config.sh
+ 	sh ./tools/check_console_profile_config.sh
+ 	sh ./tools/check_linode_no_audio.sh
+@@ -227,7 +228,7 @@ check: libc
+ 	sh ./tools/check_jtmfs_systemwall.sh
+ 
+ clean:
+-	@echo "--- cleaning JTMOS V68.8.57.10.18.16.95 generated files"
++	@echo "--- cleaning JTMOS V68.8.57.10.18.16.97 generated files"
+ 	$(MAKE) -C kernel32 clean || true
+ 	$(MAKE) -C boot32pm clean || true
+ 	$(MAKE) -C boot32 clean || true
+diff --git a/RELEASE-V16.97.txt b/RELEASE-V16.97.txt
+new file mode 100644
+index 0000000..7def5f5
+--- /dev/null
++++ b/RELEASE-V16.97.txt
+@@ -0,0 +1,39 @@
++JTMOS V68.8.57.10.18.16.97 - GeForce 6150SE/MCP61 native LFB modeset
++2026-09-05
++
++Target hardware
++---------------
++Acer/eMachines systems using NVIDIA GeForce 6150SE nForce 430 / MCP61,
++PCI ID 10DE:03D0.
++
++Changes
++-------
++* Adds kernel32/drivers/vga/nv6150.c/.h.
++* Early PCI probe finds 10DE:03D0 and discovers BAR0 MMIO + BAR1 LFB.
++* BAR1 is connected to the existing JTMOS VESA/LFB paging contract before
++  paging is enabled, while VGA text remains visible.
++* VBE-first policy is retained: a valid boot32 VBE handoff always wins.
++* If VBE is unavailable, the NVIDIA provider is tried before VBox/BGA.
++* Native CRTC0 modes supported initially:
++    - 1024x768x32 @ 60 Hz for GraOS
++    - 640x480x32 @ 60 Hz recovery mode
++* Programs NV4x/Curie VGA CRTC extensions, PCRTC scanout, PRAMDAC packed-pixel
++  state, C61 FIFO arbitration and the two-stage VPLL.
++* C61 two-stage PLL follows the legacy Linux nvidiafb model: first-stage VCO
++  400..1000 MHz, P:N:M in VPLL A and fixed 0x80000401 second stage.
++* Compile-time recovery switch NV6150_NATIVE_PLL=0 refuses native mode changes
++  while retaining probe/LFB preparation.
++* Adds tools/check_nv6150_lfb.sh and docs/NVIDIA-6150SE-MCP61.md.
++
++Safety / scope
++--------------
++The driver deliberately does not re-route outputs, program TV/LVDS/TMDS,
++accelerate 2D/3D, or implement dual-head/EDID/DDC.  It preserves BIOS analog
++routing and only changes display registers when GraOS explicitly requests the
++native graphics transition after paging is active.
++
++Hardware validation
++-------------------
++The source and mode/PLL arithmetic are regression-tested and the changed kernel
++objects compile with the JTMOS IA-32/Linode profile.  Final visual validation
++must be performed on the eMachines GeForce 6150SE machine.
+diff --git a/docs/NVIDIA-6150SE-MCP61.md b/docs/NVIDIA-6150SE-MCP61.md
+new file mode 100644
+index 0000000..d0de730
+--- /dev/null
++++ b/docs/NVIDIA-6150SE-MCP61.md
+@@ -0,0 +1,48 @@
++# JTMOS native NVIDIA GeForce 6150SE / MCP61 display provider
++
++Target: eMachines systems using NVIDIA GeForce 6150SE nForce 430 / MCP61,
++PCI ID `10DE:03D0`.
++
++## Policy
++
++A successful boot32 VBE handoff always wins.  The native provider is only
++prepared when VBE is unavailable.  Preparation probes PCI BAR0/BAR1 and makes
++BAR1 available to the existing JTMOS LFB paging contract, but it leaves VGA
++text mode untouched.  Native CRTC/RAMDAC/PLL programming happens only when
++GraOS explicitly requests graphics after paging is active.
++
++Supported native modes in the first implementation:
++
++* 1024x768x32 @ 60 Hz (GraOS)
++* 640x480x32 @ 60 Hz (recovery)
++
++The driver intentionally preserves the BIOS-selected analog output routing.
++It does not implement acceleration, HDMI/TV/LVDS routing, EDID/DDC or dual-head
++configuration yet.
++
++## Recovery
++
++If experimental native PLL programming gives a black screen on a particular
++6150SE board, reboot (the driver does not touch the display before GraOS is
++started) and build with `NV6150_NATIVE_PLL=0` in `nv6150.h`.  Probe/LFB mapping
++will remain available while native mode-setting is refused safely.
++
++Expected boot log when VBE is unavailable:
++
++    NV6150: GeForce 6150SE/MCP61 at ... BAR0=... BAR1/LFB=...
++    NV6150: GraOS BAR1 LFB prepared ... VGA text retained.
++
++Expected GraOS transition log:
++
++    NV6150: VPLL target=65000 kHz ...
++    NV6150: native mode 1024x768x32 ...
++    GraOS graphics: 1024x768x32 activated through NV6150/MCP61.
++
++## Register references used for the port
++
++The user-provided modern NVIDIA modeset source was used as architectural
++context, but MCP61 is old Curie/NV4x hardware.  The concrete legacy register
++programming is therefore based primarily on the Linux Nouveau NV04/Curie CRTC
++path (`drivers/gpu/drm/nouveau/dispnv04/crtc.c` and `nvreg.h`) and the legacy
++NVIDIA framebuffer driver's C61-specific PLL/FIFO calculations
++(`drivers/video/fbdev/nvidia/nv_hw.c`).
+diff --git a/kernel32/drivers/vga/nv6150.c b/kernel32/drivers/vga/nv6150.c
+new file mode 100644
+index 0000000..f5f8c44
+--- /dev/null
++++ b/kernel32/drivers/vga/nv6150.c
+@@ -0,0 +1,553 @@
++//////////////////////////////////////////////////////////////////////////////////
++// nv6150.c
++// Native NVIDIA GeForce 6150SE / MCP61 (10DE:03D0) LFB/mode-set provider.
++//
++// This is a deliberately small NV4x/C61 display driver.  It does not attempt
++// to implement NVIDIA's modern KMS stack.  It preserves BIOS output routing,
++// discovers BAR0/BAR1 before paging, and changes CRTC0 only on an explicit
++// GraOS graphics request after paging is active.
++//////////////////////////////////////////////////////////////////////////////////
++#include "kernel32.h"
++#include "paging.h"
++#include "vesa.h"
++#include "nv6150.h"
++
++#define PCI_CONFIG_ADDRESS       0x0CF8
++#define PCI_CONFIG_DATA          0x0CFC
++#define PCI_COMMAND_REG          0x04
++#define PCI_COMMAND_IO           0x0001
++#define PCI_COMMAND_MEMORY       0x0002
++#define PCI_BAR0_REG             0x10
++#define PCI_BAR1_REG             0x14
++
++/* NV4x/C61 BAR0 register offsets. */
++#define NV_PEXTDEV_BOOT_0        0x00101000UL
++#define NV_PCRTC_CONFIG          0x00600804UL
++#define NV_PCRTC_START           0x00600800UL
++#define NV_PRAMDAC_VPLL          0x00680508UL
++#define NV_PRAMDAC_PLLSEL        0x0068050CUL
++#define NV_PRAMDAC_VPLL_B        0x00680578UL
++#define NV_PRAMDAC_GENERAL       0x00680600UL
++#define NV_PRAMDAC_900           0x00680900UL
++
++#define NV_MMIO_PEXT_PAGE        0x00101000UL
++#define NV_MMIO_PCRTC_PAGE       0x00600000UL
++#define NV_MMIO_PRAMDAC_PAGE     0x00680000UL
++
++#define NV_PCRTC_CONFIG_NON_VGA  0x00000001UL
++#define NV_PRAMDAC_GENERAL_32BPP 0x20100130UL
++
++/* Nouveau NV4x CRTC0 VPLL selection.  MCP61/Curie uses the programmable
++ * VPLL path and the long-pipe clock ratio; preserve unrelated BIOS routing. */
++#define NV_PLLSEL_USE_VPLL2       0x00000004UL
++#define NV_PLLSEL_SOURCE_VPLL     0x00000200UL
++#define NV_PLLSEL_VCLK_RATIO_DB2  0x10000000UL
++#define NV_PLLSEL_VPLL1_MASK      (NV_PLLSEL_SOURCE_VPLL | NV_PLLSEL_VCLK_RATIO_DB2)
++
++#define VGA_MISC_WRITE           0x03C2
++#define VGA_SEQ_INDEX            0x03C4
++#define VGA_SEQ_DATA             0x03C5
++#define VGA_GFX_INDEX            0x03CE
++#define VGA_GFX_DATA             0x03CF
++#define VGA_CRTC_INDEX           0x03D4
++#define VGA_CRTC_DATA            0x03D5
++#define VGA_ATTR_INDEX           0x03C0
++#define VGA_INPUT_STATUS         0x03DA
++
++#define NV6150_REQUIRED_LFB_BYTES ((DWORD)NV6150_GRAOS_WIDTH * (DWORD)NV6150_GRAOS_HEIGHT * 4UL)
++
++int nv6150_prepared = FALSE;
++int nv6150_active = FALSE;
++DWORD nv6150_mmio_phys = 0;
++DWORD nv6150_lfb_phys = 0;
++
++static int nv6150_bus = -1;
++static int nv6150_dev = -1;
++static int nv6150_func = -1;
++static volatile DWORD *nv6150_pext = NULL;
++static volatile DWORD *nv6150_pcrtc = NULL;
++static volatile DWORD *nv6150_pramdac = NULL;
++static int nv6150_mmio_mapped = FALSE;
++
++struct nv6150_mode {
++    int width, height;
++    int hsync_start, hsync_end, htotal;
++    int vsync_start, vsync_end, vtotal;
++    DWORD clock_khz;
++    BYTE misc;
++};
++
++/* Standard VESA/VGA 60 Hz timings. */
++static const struct nv6150_mode nv6150_modes[] = {
++    { 640,  480,  656,  752,  800, 490, 492, 525, 25175UL, 0xE3 },
++    { 1024, 768, 1048, 1184, 1344, 771, 777, 806, 65000UL, 0xE3 }
++};
++
++static DWORD nv_pci_addr(int bus, int dev, int func, int reg)
++{
++    return 0x80000000UL |
++           ((DWORD)(bus & 0xff) << 16) |
++           ((DWORD)(dev & 0x1f) << 11) |
++           ((DWORD)(func & 7) << 8) |
++           ((DWORD)reg & 0xfc);
++}
++
++static DWORD nv_pci_read32(int bus, int dev, int func, int reg)
++{
++    outportd(PCI_CONFIG_ADDRESS, nv_pci_addr(bus,dev,func,reg));
++    return inportd(PCI_CONFIG_DATA);
++}
++
++static void nv_pci_write32(int bus, int dev, int func, int reg, DWORD value)
++{
++    outportd(PCI_CONFIG_ADDRESS, nv_pci_addr(bus,dev,func,reg));
++    outportd(PCI_CONFIG_DATA, value);
++}
++
++static int nv_find_device(void)
++{
++    int bus, dev, func, maxfunc;
++    DWORD id, hdr;
++    WORD vendor, device;
++
++    for(bus=0; bus<256; bus++) {
++        for(dev=0; dev<32; dev++) {
++            id=nv_pci_read32(bus,dev,0,0);
++            vendor=(WORD)(id & 0xffff);
++            if(vendor==0xffff || vendor==0x0000) continue;
++            hdr=nv_pci_read32(bus,dev,0,0x0c);
++            maxfunc=(hdr & 0x00800000UL) ? 8 : 1;
++            for(func=0; func<maxfunc; func++) {
++                id=nv_pci_read32(bus,dev,func,0);
++                vendor=(WORD)(id & 0xffff);
++                device=(WORD)((id >> 16) & 0xffff);
++                if(vendor==NV6150_PCI_VENDOR && device==NV6150_PCI_DEVICE) {
++                    nv6150_bus=bus; nv6150_dev=dev; nv6150_func=func;
++                    return TRUE;
++                }
++            }
++        }
++    }
++    return FALSE;
++}
++
++static int nv_enable_pci_memory(void)
++{
++    DWORD cmd;
++    if(nv6150_bus<0) return FALSE;
++    cmd=nv_pci_read32(nv6150_bus,nv6150_dev,nv6150_func,PCI_COMMAND_REG);
++    if((cmd & (PCI_COMMAND_IO|PCI_COMMAND_MEMORY)) !=
++       (PCI_COMMAND_IO|PCI_COMMAND_MEMORY)) {
++        cmd |= PCI_COMMAND_IO|PCI_COMMAND_MEMORY;
++        nv_pci_write32(nv6150_bus,nv6150_dev,nv6150_func,PCI_COMMAND_REG,cmd);
++        cmd=nv_pci_read32(nv6150_bus,nv6150_dev,nv6150_func,PCI_COMMAND_REG);
++    }
++    return ((cmd & PCI_COMMAND_MEMORY) != 0);
++}
++
++static DWORD nv_bar_phys(int reg)
++{
++    DWORD bar;
++    bar=nv_pci_read32(nv6150_bus,nv6150_dev,nv6150_func,reg);
++    if(bar==0 || bar==0xffffffffUL || (bar & 1)) return 0;
++    /* MCP61 is a pre-NV50 32-bit BAR device.  Reject a 64-bit BAR rather than
++     * silently truncating it on JTMOS/IA-32. */
++    if((bar & 6) == 4) return 0;
++    return bar & 0xfffffff0UL;
++}
++
++int Nv6150Probe(void)
++{
++    DWORD bar0, bar1;
++    nv6150_prepared=FALSE;
++    nv6150_active=FALSE;
++    nv6150_mmio_phys=0;
++    nv6150_lfb_phys=0;
++    nv6150_mmio_mapped=FALSE;
++    nv6150_pext=NULL; nv6150_pcrtc=NULL; nv6150_pramdac=NULL;
++
++    if(!nv_find_device()) return FALSE;
++    if(!nv_enable_pci_memory()) {
++        printk("NV6150: 10DE:03D0 found but PCI memory decoding is disabled.\n");
++        return FALSE;
++    }
++    bar0=nv_bar_phys(PCI_BAR0_REG);
++    bar1=nv_bar_phys(PCI_BAR1_REG);
++    if(!bar0 || !bar1) {
++        printk("NV6150: invalid BARs BAR0=0x%x BAR1=0x%x.\n",bar0,bar1);
++        return FALSE;
++    }
++    nv6150_mmio_phys=bar0;
++    nv6150_lfb_phys=bar1;
++    printk("NV6150: GeForce 6150SE/MCP61 at %d:%d.%d BAR0=0x%x BAR1/LFB=0x%x.\n",
++           nv6150_bus,nv6150_dev,nv6150_func,bar0,bar1);
++    return TRUE;
++}
++
++int Nv6150PrepareGraOS(void)
++{
++    if(!Nv6150Probe()) return FALSE;
++
++    /* Feed pg_init() the future scanout aperture without changing VGA text
++     * mode.  pg_init() will identity-map this 3 MiB LFB before CR0.PG. */
++    vesa_width=NV6150_GRAOS_WIDTH;
++    vesa_height=NV6150_GRAOS_HEIGHT;
++    vesa_bpp=NV6150_BPP;
++    vesa_pitch=NV6150_GRAOS_WIDTH*4;
++    vesa_frame_buf=(BYTE *)nv6150_lfb_phys;
++    vb=vesa_frame_buf;
++    vesa_frame_buf_bytes=NV6150_REQUIRED_LFB_BYTES;
++    vesa_mode_attributes=0x0091;
++    vesa_red_mask_size=8;   vesa_red_field_pos=16;
++    vesa_green_mask_size=8; vesa_green_field_pos=8;
++    vesa_blue_mask_size=8;  vesa_blue_field_pos=0;
++    vesa_alpha_mask_size=8; vesa_alpha_field_pos=24;
++    vesa_boot_graphics=FALSE;
++    vesa_enabled=FALSE;
++    nv6150_active=FALSE;
++    nv6150_prepared=TRUE;
++    printk("NV6150: GraOS BAR1 LFB prepared at 0x%x; VGA text retained.\n",
++           nv6150_lfb_phys);
++    return TRUE;
++}
++
++static volatile DWORD *nv_map_mmio_page(DWORD offset, int pages)
++{
++    DWORD phys, map;
++    phys=nv6150_mmio_phys + offset;
++    if(phys & 0xfffUL) return NULL;
++    map=pg_mapio((int)(phys/4096UL),pages);
++    if(!map) return NULL;
++    return (volatile DWORD *)map;
++}
++
++static int nv_map_mmio(void)
++{
++    if(nv6150_mmio_mapped) return TRUE;
++    if(!paging_enabled || !nv6150_mmio_phys) return FALSE;
++    nv6150_pext=nv_map_mmio_page(NV_MMIO_PEXT_PAGE,1);
++    nv6150_pcrtc=nv_map_mmio_page(NV_MMIO_PCRTC_PAGE,2);
++    nv6150_pramdac=nv_map_mmio_page(NV_MMIO_PRAMDAC_PAGE,1);
++    if(!nv6150_pext || !nv6150_pcrtc || !nv6150_pramdac) {
++        printk("NV6150: unable to map BAR0 display MMIO.\n");
++        return FALSE;
++    }
++    nv6150_mmio_mapped=TRUE;
++    return TRUE;
++}
++
++static DWORD nv_mmio_read(DWORD offset)
++{
++    if(offset>=NV_MMIO_PEXT_PAGE && offset<NV_MMIO_PEXT_PAGE+0x1000UL)
++        return nv6150_pext[(offset-NV_MMIO_PEXT_PAGE)>>2];
++    if(offset>=NV_MMIO_PCRTC_PAGE && offset<NV_MMIO_PCRTC_PAGE+0x2000UL)
++        return nv6150_pcrtc[(offset-NV_MMIO_PCRTC_PAGE)>>2];
++    if(offset>=NV_MMIO_PRAMDAC_PAGE && offset<NV_MMIO_PRAMDAC_PAGE+0x1000UL)
++        return nv6150_pramdac[(offset-NV_MMIO_PRAMDAC_PAGE)>>2];
++    return 0xffffffffUL;
++}
++
++static void nv_mmio_write(DWORD offset, DWORD value)
++{
++    volatile DWORD *p=NULL;
++    if(offset>=NV_MMIO_PEXT_PAGE && offset<NV_MMIO_PEXT_PAGE+0x1000UL)
++        p=&nv6150_pext[(offset-NV_MMIO_PEXT_PAGE)>>2];
++    else if(offset>=NV_MMIO_PCRTC_PAGE && offset<NV_MMIO_PCRTC_PAGE+0x2000UL)
++        p=&nv6150_pcrtc[(offset-NV_MMIO_PCRTC_PAGE)>>2];
++    else if(offset>=NV_MMIO_PRAMDAC_PAGE && offset<NV_MMIO_PRAMDAC_PAGE+0x1000UL)
++        p=&nv6150_pramdac[(offset-NV_MMIO_PRAMDAC_PAGE)>>2];
++    if(p) { *p=value; (void)*p; }
++}
++
++static BYTE nv_crtc_read(BYTE index)
++{
++    outportb(VGA_CRTC_INDEX,index);
++    return inportb(VGA_CRTC_DATA);
++}
++static void nv_crtc_write(BYTE index, BYTE value)
++{
++    outportb(VGA_CRTC_INDEX,index); outportb(VGA_CRTC_DATA,value);
++}
++static void nv_seq_write(BYTE index, BYTE value)
++{
++    outportb(VGA_SEQ_INDEX,index); outportb(VGA_SEQ_DATA,value);
++}
++static void nv_gfx_write(BYTE index, BYTE value)
++{
++    outportb(VGA_GFX_INDEX,index); outportb(VGA_GFX_DATA,value);
++}
++static void nv_attr_write(BYTE index, BYTE value)
++{
++    (void)inportb(VGA_INPUT_STATUS);
++    outportb(VGA_ATTR_INDEX,index);
++    outportb(VGA_ATTR_INDEX,value);
++}
++
++static const struct nv6150_mode *nv_find_mode(int width,int height)
++{
++    int i;
++    for(i=0;i<(int)(sizeof(nv6150_modes)/sizeof(nv6150_modes[0]));i++)
++        if(nv6150_modes[i].width==width && nv6150_modes[i].height==height)
++            return &nv6150_modes[i];
++    return NULL;
++}
++
++/* C61/NV4x two-stage pixel PLL.  The second stage is fixed x4, matching the
++ * long-standing NV4x programming model.  Search a conservative N/M/P space
++ * and choose the closest output clock. */
++static int nv_calc_pll(DWORD target_khz, DWORD crystal_khz,
++                       DWORD *pll_a, DWORD *pll_b, DWORD *actual_khz)
++{
++    int p,m,n,bp=0,bm=0,bn=0;
++    DWORD besterr=0xffffffffUL,best=0;
++    unsigned long long num,out;
++
++    if(!target_khz || !crystal_khz) return FALSE;
++    for(p=0;p<=6;p++) {
++        DWORD vco=target_khz << p;
++        /* C61 nvidiafb two-stage VPLL constraint: first-stage VCO must stay
++         * in the 400..1000 MHz window. */
++        if(vco<400000UL || vco>1000000UL) continue;
++        for(m=1;m<=13;m++) {
++            for(n=5;n<=255;n++) {
++                num=(unsigned long long)crystal_khz*4ULL*(unsigned long long)n;
++                out=(DWORD)(num/((unsigned long long)m*(1ULL<<p)));
++                if(out>target_khz) {
++                    if(out-target_khz>=besterr) continue;
++                    besterr=out-target_khz;
++                } else {
++                    if(target_khz-out>=besterr) continue;
++                    besterr=target_khz-out;
++                }
++                best=out; bp=p; bm=m; bn=n;
++            }
++        }
++    }
++    if(best==0 || besterr > target_khz/100UL) return FALSE; /* <= 1% */
++    /* NV4x two-stage PLL A is P:N:M.  Bit31 belongs to PLL B's fixed x4
++     * coefficient, not to PLL A. */
++    *pll_a=((DWORD)bp<<16) | ((DWORD)bn<<8) | (DWORD)bm;
++    *pll_b=0x80000401UL;
++    *actual_khz=best;
++    return TRUE;
++}
++
++static int nv_program_pll(DWORD target_khz)
++{
++#if NV6150_NATIVE_PLL
++    DWORD strap,crystal,pa,pb,actual,old_a,old_b,old_sel,new_sel;
++    strap=nv_mmio_read(NV_PEXTDEV_BOOT_0);
++    crystal=(strap & (1UL<<6)) ? 14318UL : 13500UL;
++    if(strap & (1UL<<22)) crystal=27000UL;
++    if(!nv_calc_pll(target_khz,crystal,&pa,&pb,&actual)) {
++        printk("NV6150: cannot synthesize pixel clock %u kHz (crystal %u).\n",
++               target_khz,crystal);
++        return FALSE;
++    }
++    old_a=nv_mmio_read(NV_PRAMDAC_VPLL);
++    old_b=nv_mmio_read(NV_PRAMDAC_VPLL_B);
++    old_sel=nv_mmio_read(NV_PRAMDAC_PLLSEL);
++
++    /* Preserve BIOS TV/output routing while selecting the same programmable
++     * CRTC0 VPLL path that Nouveau uses on Curie. */
++    new_sel=(old_sel & ~NV_PLLSEL_VPLL1_MASK) |
++            NV_PLLSEL_USE_VPLL2 | NV_PLLSEL_SOURCE_VPLL |
++            NV_PLLSEL_VCLK_RATIO_DB2;
++    nv_mmio_write(NV_PRAMDAC_PLLSEL,new_sel);
++    nv_mmio_write(NV_PRAMDAC_VPLL,pa);
++    nv_mmio_write(NV_PRAMDAC_VPLL_B,pb);
++
++    if(nv_mmio_read(NV_PRAMDAC_VPLL)!=pa ||
++       nv_mmio_read(NV_PRAMDAC_VPLL_B)!=pb ||
++       nv_mmio_read(NV_PRAMDAC_PLLSEL)!=new_sel) {
++        nv_mmio_write(NV_PRAMDAC_VPLL,old_a);
++        nv_mmio_write(NV_PRAMDAC_VPLL_B,old_b);
++        nv_mmio_write(NV_PRAMDAC_PLLSEL,old_sel);
++        printk("NV6150: VPLL write/readback failed; restored BIOS clock.\n");
++        return FALSE;
++    }
++    printk("NV6150: VPLL target=%u kHz actual=%u kHz crystal=%u kHz N=%u M=%u P=%u.\n",
++           target_khz,actual,crystal,(pa>>8)&0xff,pa&0xff,(pa>>16)&7);
++    return TRUE;
++#else
++    printk("NV6150: native PLL disabled at compile time.\n");
++    return FALSE;
++#endif
++}
++
++static void nv_write_vga_mode(const struct nv6150_mode *m, int pitch)
++{
++    int hd,hs,he,ht,hbs,hbe,vd,vs,ve,vt,vbs,vbe,q,i;
++    BYTE ov,cell,screen,horiz,extra;
++
++    hd=(m->width>>3)-1;
++    hs=(m->hsync_start>>3)+1;
++    he=(m->hsync_end>>3)+1;
++    ht=(m->htotal>>3)-5;
++    hbs=(m->width>>3)-1;
++    hbe=(m->htotal>>3)-1;
++    vd=m->height-1;
++    vs=m->vsync_start-1;
++    ve=m->vsync_end-1;
++    vt=m->vtotal-2;
++    vbs=m->height-1;
++    vbe=m->vtotal-1;
++    q=pitch/8;
++
++    ov=((vt>>8)&1) | (((vd>>8)&1)<<1) | (((vs>>8)&1)<<2) |
++       (((vbs>>8)&1)<<3) | 0x10 | (((vt>>9)&1)<<5) |
++       (((vd>>9)&1)<<6) | (((vs>>9)&1)<<7);
++    cell=0x40 | (((vbs>>9)&1)<<5);
++    screen=((hbe>>6)&1)<<4 | ((vbs>>10)&1)<<3 | ((vs>>10)&1)<<2 |
++           ((vd>>10)&1)<<1 | ((vt>>10)&1);
++    horiz=((ht>>8)&1) | (((hd>>8)&1)<<1) | (((hbs>>8)&1)<<2) |
++          (((hs>>8)&1)<<3);
++    extra=((vt>>11)&1) | (((vd>>11)&1)<<2) | (((vs>>11)&1)<<4) |
++          (((vbs>>11)&1)<<6);
++
++    /* Synchronous reset + display blank. */
++    nv_seq_write(0x00,0x01);
++    nv_seq_write(0x01,0x21);
++    nv_seq_write(0x02,0x0f);
++    nv_seq_write(0x03,0x00);
++    nv_seq_write(0x04,0x0e);
++    outportb(VGA_MISC_WRITE,m->misc);
++
++    /* Unlock VGA and NVIDIA extended CRTC registers. */
++    nv_crtc_write(0x1f,0x57);
++    nv_crtc_write(0x11,nv_crtc_read(0x11)&0x7f);
++    nv_crtc_write(0x44,0x00); /* CRTC0 owns the analog head. */
++
++    nv_crtc_write(0x00,(BYTE)ht);
++    nv_crtc_write(0x01,(BYTE)hd);
++    nv_crtc_write(0x02,(BYTE)hbs);
++    nv_crtc_write(0x03,(BYTE)(0x80 | (hbe&0x1f)));
++    nv_crtc_write(0x04,(BYTE)hs);
++    nv_crtc_write(0x05,(BYTE)(((hbe>>5)&1)<<7 | (he&0x1f)));
++    nv_crtc_write(0x06,(BYTE)vt);
++    nv_crtc_write(0x07,ov);
++    nv_crtc_write(0x08,0x00);
++    nv_crtc_write(0x09,cell);
++    nv_crtc_write(0x0a,0x20); /* cursor off */
++    nv_crtc_write(0x0b,0x00);
++    nv_crtc_write(0x0c,0x00); nv_crtc_write(0x0d,0x00);
++    nv_crtc_write(0x0e,0x00); nv_crtc_write(0x0f,0x00);
++    nv_crtc_write(0x10,(BYTE)vs);
++    nv_crtc_write(0x11,(BYTE)(0x20 | (ve&0x0f)));
++    nv_crtc_write(0x12,(BYTE)vd);
++    nv_crtc_write(0x13,(BYTE)q);
++    nv_crtc_write(0x14,0x00);
++    nv_crtc_write(0x15,(BYTE)vbs);
++    nv_crtc_write(0x16,(BYTE)vbe);
++    nv_crtc_write(0x17,0xe3);
++    nv_crtc_write(0x18,0xff);
++
++    /* NV4x extended timing and packed-pixel controls. */
++    nv_crtc_write(0x19,(BYTE)(((q>>8)&7)<<5));
++    nv_crtc_write(0x1a,(m->width<1280) ? 0x04 : 0x00);
++    nv_crtc_write(0x25,screen);
++    nv_crtc_write(0x28,0x03); /* 32-bpp packed/direct colour */
++    nv_crtc_write(0x2d,horiz);
++    nv_crtc_write(0x39,0xff); /* non-interlaced */
++    nv_crtc_write(0x41,extra);
++    nv_crtc_write(0x42,(BYTE)(((q>>11)&1)<<6));
++    nv_crtc_write(0x53,0x00);
++    nv_crtc_write(0x54,0x00);
++    nv_crtc_write(0x85,0xff);
++    nv_crtc_write(0x86,0x01);
++
++    /* MCP61/C61 fixed display FIFO arbitration from the legacy NVIDIA fb
++     * driver: arbitration0=256, arbitration1=0x0480.  Preserve only the
++     * unrelated bits of FIFO control in CRE 0x1c. */
++    nv_crtc_write(0x1c,(BYTE)(nv_crtc_read(0x1c) & ~0x20));
++    nv_crtc_write(0x1b,0x00);
++    nv_crtc_write(0x20,0x80);
++    nv_crtc_write(0x47,0x04);
++
++    for(i=0;i<9;i++) {
++        static const BYTE gr[9]={0,0,0,0,0,0x40,0x05,0x0f,0xff};
++        nv_gfx_write((BYTE)i,gr[i]);
++    }
++    for(i=0;i<16;i++) nv_attr_write((BYTE)i,(BYTE)i);
++    nv_attr_write(0x10,0x01);
++    nv_attr_write(0x11,0x00);
++    nv_attr_write(0x12,0x0f);
++    nv_attr_write(0x13,0x00);
++    nv_attr_write(0x14,0x00);
++    (void)inportb(VGA_INPUT_STATUS);
++    outportb(VGA_ATTR_INDEX,0x20); /* palette/video enable */
++
++    nv_seq_write(0x01,0x01);
++    nv_seq_write(0x00,0x03);
++}
++
++int Nv6150SetMode(int width, int height, int bpp)
++{
++    const struct nv6150_mode *m;
++    int pitch;
++    DWORD general,reg900;
++
++    if(!nv6150_prepared || !paging_enabled || bpp!=32) return FALSE;
++    m=nv_find_mode(width,height);
++    if(!m) return FALSE;
++    if(!nv_map_mmio()) return FALSE;
++    pitch=width*4;
++
++    /* Snapshot/output routing remains BIOS-owned.  Only clear the Curie bit
++     * which Nouveau also clears before programming CRTC0. */
++    reg900=nv_mmio_read(NV_PRAMDAC_900);
++    nv_mmio_write(NV_PRAMDAC_900,reg900 & ~0x00010000UL);
++    nv_mmio_write(NV_PCRTC_CONFIG,NV_PCRTC_CONFIG_NON_VGA);
++
++    if(!nv_program_pll(m->clock_khz)) return FALSE;
++    nv_write_vga_mode(m,pitch);
++    nv_mmio_write(NV_PCRTC_START,0);
++
++    general=nv_mmio_read(NV_PRAMDAC_GENERAL);
++    general &= ~0x301003f0UL;
++    general |= NV_PRAMDAC_GENERAL_32BPP;
++    nv_mmio_write(NV_PRAMDAC_GENERAL,general);
++
++    vesa_width=width; vesa_height=height; vesa_bpp=32; vesa_pitch=pitch;
++    vesa_frame_buf=(BYTE *)nv6150_lfb_phys; vb=vesa_frame_buf;
++    vesa_frame_buf_bytes=(DWORD)pitch*(DWORD)height;
++    vesa_mode_attributes=0x0091;
++    vesa_red_mask_size=8;   vesa_red_field_pos=16;
++    vesa_green_mask_size=8; vesa_green_field_pos=8;
++    vesa_blue_mask_size=8;  vesa_blue_field_pos=0;
++    vesa_alpha_mask_size=8; vesa_alpha_field_pos=24;
++    vesa_boot_graphics=TRUE;
++    vesa_enabled=FALSE;
++    nv6150_active=TRUE;
++    printk("NV6150: native mode %dx%dx32 pitch=%d LFB=0x%x.\n",
++           width,height,pitch,nv6150_lfb_phys);
++    return TRUE;
++}
++
++int Nv6150SetupGraOS(void)
++{
++    if(!nv6150_prepared && !Nv6150PrepareGraOS()) return FALSE;
++    if(Nv6150SetMode(NV6150_GRAOS_WIDTH,NV6150_GRAOS_HEIGHT,NV6150_BPP))
++        return TRUE;
++    printk("NV6150: 1024x768x32 failed; trying 640x480x32 recovery mode.\n");
++    return Nv6150SetMode(NV6150_FALLBACK_WIDTH,NV6150_FALLBACK_HEIGHT,NV6150_BPP);
++}
++
++int Nv6150IsPrepared(void) { return nv6150_prepared; }
++int Nv6150IsActive(void) { return nv6150_active; }
++DWORD Nv6150GetFramebufferPhysical(void) { return nv6150_lfb_phys; }
++
++void Nv6150DumpState(void)
++{
++    if(!nv6150_prepared) {
++        printk("NV6150: not prepared.\n");
++        return;
++    }
++    printk("NV6150: BAR0=0x%x BAR1=0x%x prepared=%d active=%d paging=%d.\n",
++           nv6150_mmio_phys,nv6150_lfb_phys,nv6150_prepared,nv6150_active,
++           paging_enabled ? 1 : 0);
++    if(nv6150_mmio_mapped)
++        printk("NV6150: PCRTC_START=0x%x VPLL=0x%x VPLL_B=0x%x GENERAL=0x%x.\n",
++               nv_mmio_read(NV_PCRTC_START),nv_mmio_read(NV_PRAMDAC_VPLL),
++               nv_mmio_read(NV_PRAMDAC_VPLL_B),nv_mmio_read(NV_PRAMDAC_GENERAL));
++}
+diff --git a/kernel32/drivers/vga/nv6150.h b/kernel32/drivers/vga/nv6150.h
+new file mode 100644
+index 0000000..d6c6703
+--- /dev/null
++++ b/kernel32/drivers/vga/nv6150.h
+@@ -0,0 +1,41 @@
++#ifndef __INCLUDED_NV6150_H__
++#define __INCLUDED_NV6150_H__
++
++/*
++ * NVIDIA GeForce 6150SE / MCP61 (PCI 10DE:03D0) native LFB provider.
++ *
++ * The driver is intentionally a fallback behind a working boot32 VBE handoff.
++ * Probe/prepare never changes the visible video mode.  The actual mode switch
++ * happens only when GraOS explicitly requests graphics after paging is active.
++ */
++
++#define NV6150_PCI_VENDOR          0x10DE
++#define NV6150_PCI_DEVICE          0x03D0
++
++#define NV6150_GRAOS_WIDTH         1024
++#define NV6150_GRAOS_HEIGHT        768
++#define NV6150_FALLBACK_WIDTH      640
++#define NV6150_FALLBACK_HEIGHT     480
++#define NV6150_BPP                 32
++
++/* Set to 0 for an emergency build which probes/maps the LFB but refuses to
++ * touch the pixel clock.  The normal eMachines profile uses the native PLL. */
++#ifndef NV6150_NATIVE_PLL
++#define NV6150_NATIVE_PLL          1
++#endif
++
++extern int nv6150_prepared;
++extern int nv6150_active;
++extern DWORD nv6150_mmio_phys;
++extern DWORD nv6150_lfb_phys;
++
++int Nv6150Probe(void);
++int Nv6150PrepareGraOS(void);
++int Nv6150SetMode(int width, int height, int bpp);
++int Nv6150SetupGraOS(void);
++int Nv6150IsPrepared(void);
++int Nv6150IsActive(void);
++DWORD Nv6150GetFramebufferPhysical(void);
++void Nv6150DumpState(void);
++
++#endif
+diff --git a/kernel32/init/initsystem.c b/kernel32/init/initsystem.c
+index 35c33ef..cf0fbd0 100755
+--- a/kernel32/init/initsystem.c
++++ b/kernel32/init/initsystem.c
+@@ -9,6 +9,7 @@
+ #include "initsystem.h"
+ #include "pit.h"    // storage-safe tick clock required by early USB delays
+ #include "vboxbga.h"
++#include "nv6150.h"
+ #include "input_policy.h"
+ #if JTMOS_MOD_AUDIO_DRIVERS
+ #include "audio.h"
+@@ -125,9 +126,11 @@ int InitSystem(void)
+ 
+ 	if(!i)
+ 	{
+-		DebugSerialWrite("[BOOT] preparing delayed VBox/BGA graphics provider\n");
+-		if(VBoxBgaPrepareGraOS())
+-			printk("Graphics provider prepared; VGA text mode remains active.\n");
++		DebugSerialWrite("[BOOT] preparing delayed native/BGA graphics provider\n");
++		if(Nv6150PrepareGraOS())
++			printk("NV6150/MCP61 graphics provider prepared; VGA text mode remains active.\n");
++		else if(VBoxBgaPrepareGraOS())
++			printk("VBox/BGA graphics provider prepared; VGA text mode remains active.\n");
+ 		else
+ 			printk("No delayed protected-mode graphics provider detected.\n");
+ 
+diff --git a/kernel32/init/kernel32.h b/kernel32/init/kernel32.h
+index 268e15e..f70013a 100644
+--- a/kernel32/init/kernel32.h
++++ b/kernel32/init/kernel32.h
+@@ -46,6 +46,7 @@
+ #include "initsystem.h"
+ #include "vesa.h"
+ #include "vboxbga.h"
++#include "nv6150.h"
+ #include "term.h"
+ //#include "term.h"
+ //#include "partsup.h"
+diff --git a/kernel32/init/vesa.c b/kernel32/init/vesa.c
+index 9e0db98..3b54e79 100644
+--- a/kernel32/init/vesa.c
++++ b/kernel32/init/vesa.c
+@@ -15,6 +15,7 @@
+ #include "sysvga.h"
+ #include "vga.h"
+ #include "vboxbga.h"
++#include "nv6150.h"
+ 
+ /* Legacy colour numbers are resolved through mcga_color_to_rgba(). */
+ 
+@@ -626,6 +627,9 @@ int VesaGraOSAvailable(void)
+ {
+     if(VesaGraOSReady())
+         return TRUE;
++    if(Nv6150IsPrepared() && vesa_frame_buf != NULL &&
++       vesa_frame_buf_bytes >= GRAOS_VESA_FRAME_BYTES)
++        return TRUE;
+     if(VBoxBgaIsPrepared() && vesa_frame_buf != NULL &&
+        vesa_frame_buf_bytes >= GRAOS_VESA_FRAME_BYTES)
+         return TRUE;
+@@ -650,6 +654,24 @@ int VesaStartGraOSGraphics(void)
+     if(!paging_enabled)
+         return FALSE;
+ 
++    if(Nv6150IsPrepared())
++    {
++        if(!Nv6150SetMode(GRAOS_VESA_WIDTH, GRAOS_VESA_HEIGHT,
++                          GRAOS_VESA_BPP))
++        {
++            printk("GraOS graphics: NV6150 1024x768x32 mode set failed.\n");
++            return FALSE;
++        }
++        if(!VesaActivate())
++        {
++            printk("GraOS graphics: NV6150 LFB activation failed.\n");
++            return FALSE;
++        }
++        VesaTextConsoleEnable(TRUE);
++        printk("GraOS graphics: 1024x768x32 activated through NV6150/MCP61.\n");
++        return VesaGraOSReady();
++    }
++
+     if(VBoxBgaIsPrepared())
+     {
+         if(!VBoxBgaSetMode(GRAOS_VESA_WIDTH, GRAOS_VESA_HEIGHT,
+diff --git a/tools/check_nv6150_lfb.sh b/tools/check_nv6150_lfb.sh
+new file mode 100755
+index 0000000..f54a4bf
+--- /dev/null
++++ b/tools/check_nv6150_lfb.sh
+@@ -0,0 +1,101 @@
++#!/bin/sh
++set -eu
++
++ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
++C="$ROOT/kernel32/drivers/vga/nv6150.c"
++H="$ROOT/kernel32/drivers/vga/nv6150.h"
++V="$ROOT/kernel32/init/vesa.c"
++I="$ROOT/kernel32/init/initsystem.c"
++D="$ROOT/docs/NVIDIA-6150SE-MCP61.md"
++
++fail() { echo "check_nv6150_lfb: FAIL: $*" >&2; exit 1; }
++need() { grep -Fq "$2" "$1" || fail "missing '$2' in ${1#$ROOT/}"; }
++for f in "$C" "$H" "$V" "$I" "$D"; do [ -f "$f" ] || fail "missing ${f#$ROOT/}"; done
++
++need "$H" 'NV6150_PCI_VENDOR          0x10DE'
++need "$H" 'NV6150_PCI_DEVICE          0x03D0'
++need "$H" 'NV6150_GRAOS_WIDTH         1024'
++need "$H" 'NV6150_GRAOS_HEIGHT        768'
++need "$H" 'NV6150_FALLBACK_WIDTH      640'
++need "$H" 'NV6150_FALLBACK_HEIGHT     480'
++need "$H" 'NV6150_BPP                 32'
++need "$H" 'NV6150_NATIVE_PLL          1'
++
++need "$C" '#define NV_PCRTC_START           0x00600800UL'
++need "$C" '#define NV_PCRTC_CONFIG          0x00600804UL'
++need "$C" '#define NV_PCRTC_CONFIG_NON_VGA  0x00000001UL'
++need "$C" '#define NV_PRAMDAC_VPLL          0x00680508UL'
++need "$C" '#define NV_PRAMDAC_PLLSEL        0x0068050CUL'
++need "$C" '#define NV_PRAMDAC_VPLL_B        0x00680578UL'
++need "$C" '#define NV_PRAMDAC_GENERAL       0x00680600UL'
++need "$C" 'NV_PRAMDAC_GENERAL_32BPP 0x20100130UL'
++need "$C" 'NV_PLLSEL_USE_VPLL2       0x00000004UL'
++need "$C" 'NV_PLLSEL_SOURCE_VPLL     0x00000200UL'
++need "$C" 'NV_PLLSEL_VCLK_RATIO_DB2  0x10000000UL'
++
++# BAR1 is the pre-NV50 LFB aperture and must enter the shared paging contract.
++need "$C" 'bar1=nv_bar_phys(PCI_BAR1_REG);'
++need "$C" 'nv6150_lfb_phys=bar1;'
++need "$C" 'vesa_frame_buf=(BYTE *)nv6150_lfb_phys;'
++need "$C" 'vesa_frame_buf_bytes=NV6150_REQUIRED_LFB_BYTES;'
++need "$C" 'pg_mapio((int)(phys/4096UL),pages)'
++
++# Native prepare must remain non-destructive: only an explicit GraOS transition sets a mode.
++PREP=$(sed -n '/int Nv6150PrepareGraOS(void)/,/^}/p' "$C")
++printf '%s\n' "$PREP" | grep -Fq 'vesa_boot_graphics=FALSE' || fail 'prepare must retain VGA text mode'
++if printf '%s\n' "$PREP" | grep -Fq 'Nv6150SetMode('; then
++    fail 'prepare must not program a native mode'
++fi
++
++# MCP61/C61 two-stage VPLL constraints and fixed second stage from nvidiafb.
++need "$C" 'if(vco<400000UL || vco>1000000UL) continue;'
++need "$C" '*pll_a=((DWORD)bp<<16) | ((DWORD)bn<<8) | (DWORD)bm;'
++need "$C" '*pll_b=0x80000401UL;'
++# C61 fixed FIFO arbitration0=256, arbitration1=0x0480.
++need "$C" 'nv_crtc_write(0x1b,0x00);'
++need "$C" 'nv_crtc_write(0x20,0x80);'
++need "$C" 'nv_crtc_write(0x47,0x04);'
++# Curie/NV4x packed-pixel/timing extensions.
++for r in 0x19 0x25 0x28 0x2d 0x41 0x42 0x85 0x86; do
++    grep -Fq "nv_crtc_write($r" "$C" || fail "missing CRTC $r programming"
++done
++
++# VBE is primary; native NVIDIA precedes VBox only when VBE handoff was unavailable.
++need "$I" 'if(VesaBootHandoffPresent())'
++need "$I" 'if(Nv6150PrepareGraOS())'
++need "$I" 'else if(VBoxBgaPrepareGraOS())'
++need "$V" 'if(Nv6150IsPrepared() && vesa_frame_buf != NULL'
++need "$V" 'if(Nv6150IsPrepared())'
++need "$V" 'Nv6150SetMode(GRAOS_VESA_WIDTH, GRAOS_VESA_HEIGHT,'
++
++# Validate both hard-coded 60 Hz modes and the two-stage PLL search numerically.
++python3 - <<'PY'
++modes = [
++    (640,480,656,752,800,490,492,525,25175),
++    (1024,768,1048,1184,1344,771,777,806,65000),
++]
++for m in modes:
++    w,h,hs,he,ht,vs,ve,vt,clk=m
++    assert w % 8 == 0 and ht % 8 == 0
++    assert w < hs < he < ht
++    assert h < vs < ve < vt
++    # VGA CRTC fields plus NVIDIA extension bits cover these values.
++    vals=[(w>>3)-1,(hs>>3)+1,(he>>3)+1,(ht>>3)-5,h-1,vs-1,ve-1,vt-2]
++    assert all(0 <= x < 4096 for x in vals)
++    for crystal in (13500,14318,27000):
++        best=None
++        for p in range(7):
++            vco=clk << p
++            if not 400000 <= vco <= 1000000:
++                continue
++            for mm in range(1,14):
++                for n in range(5,256):
++                    out=(crystal*4*n)//(mm*(1<<p))
++                    err=abs(out-clk)
++                    if best is None or err < best[0]: best=(err,out,p,mm,n)
++        assert best is not None
++        assert best[0] <= clk//100
++print('check_nv6150_lfb: PLL/timing arithmetic PASS')
++PY
++
++echo 'check_nv6150_lfb: PASS (10DE:03D0 BAR1 LFB + C61 native 640/1024x32 fallback)'
